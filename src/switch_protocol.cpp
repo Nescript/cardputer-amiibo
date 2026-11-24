@@ -398,17 +398,17 @@ bool SwitchProtocol::buildStreamReport(OutgoingReport& out_report) {
 }
 
 ProtocolSnapshot SwitchProtocol::snapshot() const {
-    return ProtocolSnapshot{
-        stage_,
-        hid_ready_,
-        input_mode_,
-        player_leds_,
-        last_out_report_,
-        last_subcmd_,
-        rx_packets_,
-        tx_packets_,
-        mcu_.stats(),
-    };
+    ProtocolSnapshot snap{};
+    snap.stage = stage_;
+    snap.hid_ready = hid_ready_;
+    snap.input_mode = input_mode_;
+    snap.player_leds = player_leds_;
+    snap.last_out_report = last_out_report_;
+    snap.last_subcmd = last_subcmd_;
+    snap.rx_packets = rx_packets_;
+    snap.tx_packets = tx_packets_;
+    snap.nfc = mcu_.stats();
+    return snap;
 }
 
 }  // namespace amiibo

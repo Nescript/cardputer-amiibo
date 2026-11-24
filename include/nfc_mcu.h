@@ -8,8 +8,8 @@
 
 namespace amiibo {
 
-inline constexpr size_t kMcuPayloadSize = 313;
-inline constexpr size_t kMcuQueueCapacity = 8;
+constexpr size_t kMcuPayloadSize = 313;
+constexpr size_t kMcuQueueCapacity = 8;
 
 /// Standard Switch MCU CRC-8 (poly 0x07, init 0x00, no reflect, xorout 0x00).
 uint8_t mcuCrc8(const uint8_t* data, size_t len);

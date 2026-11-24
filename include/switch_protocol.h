@@ -8,9 +8,9 @@
 
 namespace amiibo {
 
-inline constexpr size_t kUsbReportSmallSize = 64;
-inline constexpr size_t kUsbReport31Size = 362;
-inline constexpr size_t kMaxReportSize = 362;
+constexpr size_t kUsbReportSmallSize = 64;
+constexpr size_t kUsbReport31Size = 362;
+constexpr size_t kMaxReportSize = 362;
 
 struct ControllerState {
     // Byte 3 (Right)

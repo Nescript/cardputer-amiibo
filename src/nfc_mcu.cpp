@@ -441,15 +441,15 @@ bool NfcMcu::consumeWriteDirty() {
 }
 
 NfcStats NfcMcu::stats() const {
-    return NfcStats{
-        poll_count_,
-        read_count_,
-        write_count_,
-        power_state_,
-        nfc_state_,
-        tag_present_,
-        write_dirty_,
-    };
+    NfcStats s{};
+    s.poll_count = poll_count_;
+    s.read_count = read_count_;
+    s.write_count = write_count_;
+    s.power_state = power_state_;
+    s.nfc_state = nfc_state_;
+    s.tag_present = tag_present_;
+    s.write_dirty = write_dirty_;
+    return s;
 }
 
 }  // namespace amiibo

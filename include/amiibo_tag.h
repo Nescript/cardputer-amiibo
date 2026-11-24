@@ -6,9 +6,9 @@
 
 namespace amiibo {
 
-inline constexpr size_t kNtag215Size = 540;
-inline constexpr size_t kNtag215LongSize = 572;
-inline constexpr size_t kUidSize = 7;
+constexpr size_t kNtag215Size = 540;
+constexpr size_t kNtag215LongSize = 572;
+constexpr size_t kUidSize = 7;
 
 /**
  * @brief In-memory NTAG215 Amiibo tag buffer with UID validation, BCC repair,
