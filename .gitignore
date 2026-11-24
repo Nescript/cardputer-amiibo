@@ -15,8 +15,10 @@ __pycache__/
 tools/*.dll
 tools/*.exe
 
-# Staged Amiibo Test Data (keep repo lightweight & clean)
+# Staged Amiibo Test Data & Personal Key Archives (keep repo lightweight & clean)
 sd_stage/
+!*Essential*
+*.zip
 
 # IDE / OS
 .vscode/
