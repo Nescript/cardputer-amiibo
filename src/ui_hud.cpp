@@ -104,6 +104,7 @@ void UiHud::begin() {
     auto& d = M5Cardputer.Display;
     // M5GFX initializes the Cardputer display upright in landscape.
     d.setBrightness(96);
+    d.setTextWrap(false, false);
     d.fillScreen(kColBg);
     dirty_ = true;
 }
@@ -157,11 +158,17 @@ void UiHud::drawTopBar(const ProtocolSnapshot& proto, const UiState& ui) {
         d.fillRect(99 + i * 7, 5, 5, 8, on ? kColGreen : kColPanel);
     }
 
-    // Heap KB + Battery + Version
-    char right_buf[32]{};
+    // Heap KB + Battery + Version (fit within x=128..238, max 18 chars)
+    char short_ver[10]{};
+    std::strncpy(short_ver, APP_VERSION, sizeof(short_ver) - 1);
+    if (char* dash = std::strchr(short_ver, '-')) {
+        *dash = '\0';
+    }
+    char right_buf[24]{};
     std::snprintf(right_buf, sizeof(right_buf), "%uK %ld%% %s",
                   static_cast<unsigned>(ui.free_heap / 1024U),
-                  static_cast<long>(ui.battery_pct), APP_VERSION);
+                  static_cast<long>(ui.battery_pct), short_ver);
+    right_buf[18] = '\0';
     d.setTextColor(kColText, kColHeader);
     const int rx = 238 - static_cast<int>(std::strlen(right_buf)) * 6;
     d.setCursor(rx > 128 ? rx : 128, 5);
