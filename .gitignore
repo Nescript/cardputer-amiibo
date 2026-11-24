@@ -1,0 +1,24 @@
+# Build & PlatformIO
+.pio/
+dist/
+*.elf
+*.bin
+*.map
+
+# Host Test Artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.exe
+*.dll
+*.so
+tools/*.dll
+tools/*.exe
+
+# Staged Amiibo Test Data (keep repo lightweight & clean)
+sd_stage/
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db
