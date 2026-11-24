@@ -207,6 +207,9 @@ class Win32HidDevice:
         self.hid.HidP_GetCaps.argtypes = [ctypes.c_void_p, ctypes.POINTER(self.HIDP_CAPS)]
         self.hid.HidP_GetCaps.restype = ctypes.c_long
 
+        self.hid.HidD_FlushQueue.argtypes = [wintypes.HANDLE]
+        self.hid.HidD_FlushQueue.restype = wintypes.BOOL
+
     def open(self, vid: int, pid: int) -> bool:
         guid = self.GUID()
         self.hid.HidD_GetHidGuid(ctypes.byref(guid))
@@ -277,6 +280,7 @@ class Win32HidDevice:
                     continue
 
                 self.handle = h
+                self.hid.HidD_FlushQueue(h)
                 self.version = attrs.VersionNumber
 
                 str_buf = ctypes.create_unicode_buffer(128)
@@ -348,14 +352,29 @@ class Win32HidDevice:
 
 
 def run_protocol_checks(write_fn, read_fn, supports_362_read: bool) -> int:
+    def wait_report(expected_id: int, timeout_ms: int = 1200) -> bytes:
+        deadline = time.time() + timeout_ms / 1000.0
+        while time.time() < deadline:
+            r = read_fn(150)
+            if r and r[0] == expected_id:
+                return r
+        raise TimeoutError(f"Timed out waiting for report 0x{expected_id:02X}")
+
     def send_and_wait(payload: list[int], expected_id: int, timeout_ms: int = 1200) -> bytes:
         pkt = bytes(payload) + bytes(max(0, 64 - len(payload)))
         write_fn(pkt[:64])
         deadline = time.time() + timeout_ms / 1000.0
         while time.time() < deadline:
             r = read_fn(150)
-            if r and r[0] == expected_id:
-                return r
+            if not r or r[0] != expected_id:
+                continue
+            if expected_id == 0x81 and payload[0] == 0x80 and len(payload) >= 2:
+                if len(r) < 2 or r[1] != payload[1]:
+                    continue
+            elif expected_id == 0x21 and payload[0] == 0x01 and len(payload) >= 11:
+                if len(r) < 15 or r[14] != payload[10]:
+                    continue
+            return r
         raise TimeoutError(f"Timed out waiting for report 0x{expected_id:02X}")
 
     # 1. Wired handshake 0x80 01..04
@@ -386,7 +405,8 @@ def run_protocol_checks(write_fn, read_fn, supports_362_read: bool) -> int:
 
     # 4. Stream 0x30 Standard Input Report
     send_and_wait([0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x03, 0x30], 0x21)
-    r30 = send_and_wait([0x01, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x01], 0x30)
+    send_and_wait([0x01, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x01], 0x21)
+    r30 = wait_report(0x30)
     assert len(r30) == 64 and r30[2] == 0x91
     print(f"[OK] Streaming 0x30 report verified (len={len(r30)}, bat_conn=0x{r30[2]:02X})")
 
