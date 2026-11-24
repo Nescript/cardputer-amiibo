@@ -27,19 +27,35 @@ const char* stageLabel(ProtocolStage st, uint16_t& color) {
     switch (st) {
     case ProtocolStage::Detached:
         color = kColRed;
+#ifdef AMIIBO_SWITCH2
+        return "NS2-OFF";
+#else
         return "NO-USB";
+#endif
     case ProtocolStage::Attached:
         color = kColAmber;
         return "ATTACH";
     case ProtocolStage::Handshake80:
         color = kColAmber;
+#ifdef AMIIBO_SWITCH2
+        return "NS2-HS";
+#else
         return "HS-80";
+#endif
     case ProtocolStage::Ready30:
         color = kColAccent;
+#ifdef AMIIBO_SWITCH2
+        return "NS2-USB";
+#else
         return "PRO-30";
+#endif
     case ProtocolStage::Ready31Nfc:
         color = kColGreen;
+#ifdef AMIIBO_SWITCH2
+        return "NS2-NFC";
+#else
         return "NFC-31";
+#endif
     default:
         color = kColMuted;
         return "INIT";
@@ -86,7 +102,7 @@ void drawEllipsisText(M5GFX& gfx, const char* text, int x, int y, size_t max_cha
 
 void UiHud::begin() {
     auto& d = M5Cardputer.Display;
-    d.setRotation(1);
+    // M5GFX initializes the Cardputer display upright in landscape.
     d.setBrightness(96);
     d.fillScreen(kColBg);
     dirty_ = true;
@@ -104,7 +120,9 @@ void UiHud::renderIfNeeded(const ProtocolSnapshot& proto, const SdBrowser& brows
     auto& d = M5Cardputer.Display;
     d.startWrite();
     drawTopBar(proto, ui);
-    if (ui.mode == UiMode::Browser) {
+    if (ui.usb_import) {
+        drawUsbImportPane(browser);
+    } else if (ui.mode == UiMode::Browser) {
         drawBrowserPane(browser, proto);
     } else {
         drawGamepadPane(proto, pad);
@@ -180,7 +198,7 @@ void UiHud::drawBrowserPane(const SdBrowser& browser, const ProtocolSnapshot& pr
         d.print("No .bin/.nfc files found.");
         d.setTextColor(kColMuted, kColBg);
         d.setCursor(10, 56);
-        d.print("Copy dumps to SD:/amiibo/");
+        d.print("Copy to SD:/amiibo/ or use Ctrl+I");
         d.setCursor(10, 70);
         d.print("[Space/G0] Arm Demo Blank Tag");
         d.setCursor(10, 84);
@@ -216,6 +234,20 @@ void UiHud::drawBrowserPane(const SdBrowser& browser, const ProtocolSnapshot& pr
     }
 }
 
+void UiHud::drawUsbImportPane(const SdBrowser& browser) {
+    auto& d = M5Cardputer.Display;
+    d.fillRect(0, 18, 240, 88, kColBg);
+    d.setTextColor(kColAccent, kColBg);
+    d.setCursor(10, 29);
+    d.print("USB AMIIBO IMPORT");
+    d.setTextColor(kColText, kColBg);
+    d.setCursor(10, 49);
+    d.print(browser.sdMounted() ? "Ready for Amiibo files or key" : "No microSD card detected");
+    d.setTextColor(kColMuted, kColBg);
+    d.setCursor(10, 73);
+    d.print("Ctrl+I to exit");
+}
+
 void UiHud::drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState& pad) {
     auto& d = M5Cardputer.Display;
     d.fillRect(0, 18, 240, 88, kColBg);
@@ -224,10 +256,16 @@ void UiHud::drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState
     d.setTextColor(kColAccent, kColPanel);
     d.setCursor(4, 21);
     char mcu_line[48]{};
+#ifdef AMIIBO_SWITCH2
+    std::snprintf(mcu_line, sizeof(mcu_line), "NS2 PAD | NFC:%s R:%lu",
+                  nfcStateLabel(proto.nfc.nfc_state),
+                  static_cast<unsigned long>(proto.nfc.read_count));
+#else
     std::snprintf(mcu_line, sizeof(mcu_line), "PAD MODE | MCU:%02X NFC:%s R:%lu",
                   static_cast<unsigned>(proto.nfc.power_state),
                   nfcStateLabel(proto.nfc.nfc_state),
                   static_cast<unsigned long>(proto.nfc.read_count));
+#endif
     d.print(mcu_line);
 
     d.setTextColor(kColText, kColBg);
@@ -246,7 +284,11 @@ void UiHud::drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState
     d.setCursor(6, 66);
     d.print("WASD:Stick  ;./,:DPad  L/K/I/J:ABXY");
     d.setCursor(6, 79);
+#ifdef AMIIBO_SWITCH2
+    d.print("Fn+IJKL:Right stick  Q/E:L/R  =:+");
+#else
     d.print("Q/E:L/R  1/2:ZL/ZR  -/=:M/P  H:Home");
+#endif
     d.setCursor(6, 92);
     d.print("Space/G0:Place/Remove  Tab:Browser");
 }
@@ -260,11 +302,13 @@ void UiHud::drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browse
     d.setTextColor(kColText, kColHeader);
     drawEllipsisText(d, browser.activeFileName(), 4, 109, 26);
 
-    const uint16_t mode_col = ui.auto_rand_uid ? kColAmber : (ui.uid_randomized ? kColAccent : kColPanel);
+    const uint16_t mode_col = ui.uid_notice || ui.auto_rand_uid
+        ? kColAmber : (ui.uid_randomized ? kColAccent : kColPanel);
     d.fillRect(166, 107, 72, 11, mode_col);
-    d.setTextColor(ui.auto_rand_uid || ui.uid_randomized ? kColBg : kColMuted, mode_col);
+    d.setTextColor(ui.uid_notice || ui.auto_rand_uid || ui.uid_randomized ? kColBg : kColMuted, mode_col);
     d.setCursor(169, 109);
-    d.print(ui.auto_rand_uid ? "AUTO-RND" : (ui.uid_randomized ? "RAND-UID" : "ORIG-UID"));
+    d.print(ui.uid_notice ? ui.uid_notice
+                          : (ui.auto_rand_uid ? "AUTO-RND" : (ui.uid_randomized ? "RAND-UID" : "ORIG-UID")));
 
     // Line 2: UID + RX/TX or status hint
     char bot[48]{};

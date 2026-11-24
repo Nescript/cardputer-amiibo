@@ -16,10 +16,11 @@ struct UiState {
     UiMode mode{UiMode::Browser};
     bool auto_rand_uid{false};
     bool uid_randomized{false};
+    bool usb_import{false};
     int32_t battery_pct{100};
     uint32_t free_heap{0};
     uint8_t active_uid[kUidSize]{};
-    char status_msg[48]{"Ready - Insert SD or Space=Demo"};
+    const char* uid_notice{nullptr};
 };
 
 /**
@@ -39,6 +40,7 @@ private:
     void drawTopBar(const ProtocolSnapshot& proto, const UiState& ui);
     void drawBrowserPane(const SdBrowser& browser, const ProtocolSnapshot& proto);
     void drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState& pad);
+    void drawUsbImportPane(const SdBrowser& browser);
     void drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browser, const UiState& ui);
 
     bool dirty_{true};

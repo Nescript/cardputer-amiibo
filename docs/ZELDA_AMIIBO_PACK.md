@@ -22,7 +22,7 @@ python tools/fetch_amiibo.py --preset zelda-plus-bonus --bonus-count 100 --out s
 python tools/fetch_amiibo.py --search "Splatoon" --source ryanshatch --out sd_stage/amiibo --limit 15
 ```
 
-> **提示（无需准备大量重复卡片）**：在 Cardputer-Adv 上选中任意一个 Amiibo 后，按 **`R`** 键可即时生成新随机 7 字节 UID，或按 **`U`** 键开启 **`AUTO-RND`**（每次读卡自动刷新 UID），即可在同一天内无限次重复刷同一角色的宝箱与限定防具！
+> 《王国之泪》对同一张 Amiibo 有每日使用限制。Switch 2 固件的 `R` 和 `AUTO-RND` 需要先导入本地密钥。操作见[重复刷卡指南](FLASH_AND_TEST_GUIDE.md#switch-2-重复刷卡)。
 
 ---
 

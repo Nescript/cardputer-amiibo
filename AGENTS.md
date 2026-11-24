@@ -16,5 +16,11 @@ Turn an M5Stack Cardputer-Adv (Stamp-S3A / `ESP32-S3FN8`, zero external hardware
 ## Cloud Sync Pointers (Google Drive)
 - **Workspace Standard**: `gdrive:Agent Workspace/AGENTS.md` (`1Rr_Ze-7uwdLh1FAsNpuEF7ndSYFCKIlM`)
 - **Handoff Doc (Update In-Place Only)**: `gdrive:Agent Workspace/Agent Handoff/Cardputer-Adv有线Amiibo模拟交接.md` (`1NcOHRW9jpqVJn5lmfwjYyRzdmmRc3xfp9D2ouEQslv4`)
+- **Handoff Archive (`old/`)**: `gdrive:Agent Workspace/Agent Handoff/old/` (`17hlG55ILRtRG4C5xki-ZvkJK-8fAlb9e`)
 - **Reference Folder**: `gdrive:Agent Workspace/Agent ref/Cardputer-Amiibo-USB/` (`1eFJwiMj8r-qBNpsGtVtAy_eKWhMJH4K4`)
 - **Deliverables Folder**: `gdrive:Agent Workspace/Cardputer-Amiibo-USB固件开发/` (`1p1bLKHJWB_1JsOxAi08GnmQIAjLiMDqK`)
+
+## Handoff Context Hygiene (Progressive Disclosure)
+1. **Active Context + Evergreen Facts Only**: Keep the main handoff doc limited to current goals, active blockers, non-negotiable hard constraints, and the latest 1-2 active milestones.
+2. **Episodic Rollover**: Once a milestone is completed or superseded, compress or move its detailed logs out of the main handoff doc into `Agent Handoff/old/`.
+3. **Just-in-Time Archive Index**: Keep only a compact index table (File ID + one-line summary) in the main handoff doc. **Do not read `old/` archive files by default**; fetch them by index only when investigating legacy issues or past design decisions.

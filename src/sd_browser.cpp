@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
 
 namespace amiibo {
 
@@ -216,10 +218,12 @@ bool SdBrowser::activateSelected(AmiiboTag& out_tag, bool& loaded_file) {
         const size_t n = f.read(raw.data(), fsize);
         ok = out_tag.loadBin(raw.data(), n);
     } else if (!is_bin && fsize > 0 && fsize <= 8192) {
-        // Flipper .nfc text file (~2.2 KB)
-        std::array<char, 8192> txt{};
-        const size_t n = f.read(reinterpret_cast<uint8_t*>(txt.data()), fsize);
-        ok = out_tag.loadFlipperNfcText(txt.data(), n);
+        // A fixed 8 KiB buffer would overflow the loop task stack even on directory entry.
+        std::unique_ptr<char[]> txt(new (std::nothrow) char[fsize]);
+        if (txt) {
+            const size_t n = f.read(reinterpret_cast<uint8_t*>(txt.get()), fsize);
+            ok = out_tag.loadFlipperNfcText(txt.get(), n);
+        }
     }
     f.close();
 

@@ -22,6 +22,7 @@ constexpr uint8_t kEpInAddr = 0x81;
 constexpr uint8_t kEpOutAddr = 0x01;
 constexpr uint16_t kEpMaxPacketSize = 64;
 constexpr size_t kTxReplyQueueCap = 12;
+constexpr uint8_t kImportRequestPrefix[] = {0x80, 0xA5, 'A', 'M', 'B', '1'};
 
 // Exact 203-byte Nintendo Switch Pro Controller HID Report Descriptor
 // (0x30 Gamepad + 0x21/0x81 Input Vendor + 0x01/0x10/0x80/0x82 Output Vendor)
@@ -190,6 +191,10 @@ struct DriverState {
     size_t q_head{0};
     size_t q_tail{0};
     size_t q_count{0};
+
+    bool import_enabled{false};
+    bool import_pending{false};
+    UsbImportReport import_report{};
 };
 
 DriverState g_drv;
@@ -225,11 +230,19 @@ void processHostPacket(const uint8_t* data, size_t len) {
         return;
     }
     if (xSemaphoreTake(g_drv.proto_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        OutgoingReport reply{};
-        if (g_drv.protocol.onHostReport(data, len, reply)) {
-            enqueueTxLocked(reply);
-            if (g_drv.tx_task_handle) {
-                xTaskNotifyGive(g_drv.tx_task_handle);
+        if (len == g_drv.import_report.size() &&
+            std::memcmp(data, kImportRequestPrefix, sizeof(kImportRequestPrefix)) == 0) {
+            if (g_drv.import_enabled && !g_drv.import_pending) {
+                std::memcpy(g_drv.import_report.data(), data, len);
+                g_drv.import_pending = true;
+            }
+        } else {
+            OutgoingReport reply{};
+            if (g_drv.protocol.onHostReport(data, len, reply)) {
+                enqueueTxLocked(reply);
+                if (g_drv.tx_task_handle) {
+                    xTaskNotifyGive(g_drv.tx_task_handle);
+                }
             }
         }
         xSemaphoreGive(g_drv.proto_mutex);
@@ -245,6 +258,7 @@ void drv_reset(uint8_t rhport) {
     g_drv.ep_out = 0;
     if (g_drv.proto_mutex && xSemaphoreTake(g_drv.proto_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         clearTxQueueLocked();
+        g_drv.import_pending = false;
         g_drv.protocol.onDetach();
         xSemaphoreGive(g_drv.proto_mutex);
     }
@@ -547,6 +561,43 @@ ProtocolSnapshot SwitchUsbTransport::snapshot() const {
 
 bool SwitchUsbTransport::isMounted() const {
     return g_drv.mounted;
+}
+
+bool SwitchUsbTransport::setImportEnabled(bool enabled) {
+    if (!g_drv.proto_mutex || xSemaphoreTake(g_drv.proto_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    g_drv.import_enabled = enabled;
+    g_drv.import_pending = false;
+    xSemaphoreGive(g_drv.proto_mutex);
+    return true;
+}
+
+bool SwitchUsbTransport::takeImportReport(UsbImportReport& report) {
+    if (!g_drv.proto_mutex || xSemaphoreTake(g_drv.proto_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return false;
+    }
+    const bool pending = g_drv.mounted && g_drv.import_pending;
+    if (pending) {
+        report = g_drv.import_report;
+        g_drv.import_pending = false;
+    }
+    xSemaphoreGive(g_drv.proto_mutex);
+    return pending;
+}
+
+void SwitchUsbTransport::replyToImportReport(const UsbImportReport& report) {
+    if (!g_drv.proto_mutex || xSemaphoreTake(g_drv.proto_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    if (g_drv.mounted && g_drv.import_enabled && g_drv.tx_task_handle) {
+        OutgoingReport reply{};
+        reply.length = report.size();
+        std::memcpy(reply.data.data(), report.data(), report.size());
+        enqueueTxLocked(reply);
+        xTaskNotifyGive(g_drv.tx_task_handle);
+    }
+    xSemaphoreGive(g_drv.proto_mutex);
 }
 
 void SwitchUsbTransport::usbTxTaskEntry(void* arg) {

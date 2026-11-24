@@ -1,5 +1,27 @@
 # Cardputer-Adv 刷写、Amiibo 准备与 Switch 实机验证指南
 
+## Switch 2 原生 USB 试刷
+
+二代测试版通过 `pio run -e m5stack-stamps3-switch2` 构建，使用二代 Pro 手柄的 USB 身份 `057E:2069`。选卡仍从 Cardputer 的 microSD `/amiibo/` 目录读取。
+
+1. 进入正常启动模式，把装有测试固件的 Cardputer 通过 USB 数据线接到 Switch 2。Cardputer 显示 `NS2-USB` 时，可在手柄页用 `Q` + `E` 发送 `L` + `R`，用 `L` 发送 `A`。
+2. 在《王国之泪》开启 Amiibo 能力，走到开阔处并进入瞄准。手柄页的 `=` 对应 `+`，`Q` 对应 `L`。按住 `Fn` 时，`I`、`J`、`K`、`L` 控制右摇杆的上、左、下、右。
+3. 按 `Tab` 进入文件浏览器。用 `;` 和 `.` 移动，按 `Enter` 进入 `01_TotK`，选中 `01_Link_TotK.bin` 再按 `Enter`。屏幕显示 `TAG:ON` 后，观察 `NS2-NFC`、`R:` 读响应计数和游戏结果。
+4. 游戏掉落道具或明确识别标签后，按 `Space` 移卡。遇到错误时记录完整提示、Cardputer 顶部状态、`TAG` 和 `R:`。`R:` 按读取块计数，游戏结果用于验收。
+
+### Switch 2 重复刷卡
+
+1. 把 Cardputer 用 C2C 数据线接电脑，正常开机后按 `Ctrl+I`。用你已有的 160 字节 Amiibo 密钥文件执行导入。密钥保存在 Cardputer 的内部配置区。
+
+   ```powershell
+   python tools/import_amiibo_usb.py --key-file "C:\path\to\key_retail.bin"
+   ```
+
+2. 再按 `Ctrl+I` 退出。显示 `KEY READY` 后接回 Switch 2，打开林克的原始 `.bin`，按 `R` 手动准备一次新 UID，或按 `U` 开启 `AUTO-RND`。
+3. 自动模式下，照常在《王国之泪》开启 Amiibo 瞄准。每当 Switch 读完标签并结束扫描，Cardputer 会为下一次准备新标签。用当天同款林克连续两次掉落验证结果。
+
+`KEY NEEDED` 表示尚未导入密钥。`VERIFY FAIL` 表示当前文件无法通过认证，自动模式会关闭。重新选中原文件并按 `Enter` 可恢复原 UID。
+
 ## 1. 刷写固件到 Cardputer-Adv
 
 > [!IMPORTANT]
@@ -41,6 +63,15 @@ python tools/fetch_amiibo.py --search "Zelda" --list-only --api-info
 
 将下载后的 `sd_stage/amiibo/` 文件夹整夹复制到 FAT32 microSD 卡根目录的 `/amiibo/` 下（支持多级子文件夹；也兼容 Flipper Zero `.nfc` 文本文件）。即使暂不插 SD 卡，开机按 **`Space`** 或 **`G0`** 也可加载内置的 `Demo Blank Tag` 先验证 Switch 识别和 NFC 读卡链路。
 
+### 通过 USB-C 导入 `.bin` 文件
+
+装有 USB 导入功能的固件可直接把文件写到 Cardputer-Adv 内的 FAT32 microSD。
+
+1. 插好 microSD，正常启动 Cardputer-Adv，用 USB-C 数据线接到 Windows 电脑。
+2. 在 Cardputer-Adv 上按 **`Ctrl` + `I`**，屏幕应显示 `USB AMIIBO IMPORT`。
+3. 在仓库根目录运行 `python tools/import_amiibo_usb.py`，将 `sd_stage/amiibo/` 下的 `.bin` 文件导入 microSD 的 `/amiibo/`。脚本会比对设备从卡上读回的 SHA-256。遇到同路径且内容不同的文件时会保留原件并报告冲突。
+4. 导入完成后再按 **`Ctrl` + `I`**，返回常规界面浏览文件。
+
 ---
 
 ## 3. Cardputer-Adv 按键操作说明
@@ -48,8 +79,8 @@ python tools/fetch_amiibo.py --search "Zelda" --list-only --api-info
 ### 全局快捷键（任意界面均有效）
 - **`Tab`**：在 **SD 文件浏览器** 与 **手柄实时控制面板** 之间切换。
 - **`Space` 或硬件 `G0` 按键**：快速 **放卡 / 移卡**（Switch 上对应把 Amiibo 贴上或移开 NFC 感应区）。
-- **`R`**：立即为当前内存中的 Amiibo 生成一组新的 **随机 7 字节 UID**（绕过游戏每日同卡仅刷 1 次限制）。
-- **`U`**：开关 **每次读卡后自动随机 UID**（`AUTO-RND` 模式；开启后将不向 SD 卡回写游戏存档）。
+- **`R`** 在 Switch 2 固件上为选中的标签生成新 UID 并重新签名，需要先导入密钥。
+- **`U`** 在 Switch 2 固件上开关 `AUTO-RND`。关闭后可按 `Enter` 重新载入原 UID。
 
 ### SD 浏览器模式（`Tab` 第 1 页）
 - **`;` / `.`（方向上/下）**：上下移动选中文件或目录。
@@ -90,4 +121,4 @@ python tools/fetch_amiibo.py --search "Zelda" --list-only --api-info
    - 在 Switch **`系统设置 -> amiibo -> 登记或变更拥有者 / 删除游戏数据`**，或直接进入支持 Amiibo 的游戏（如《塞尔达传说：旷野之息 / 王国之泪》开启 Amiibo 技能、或《集合啦！动物森友会》刷卡机）。
    - 当 Switch 提示“请轻触 amiibo”时，观察 Cardputer-Adv 顶部状态变为 **`NFC-31`**，右下角状态出现 **`POLL`**。
    - 在浏览器里选定 `.bin` 按 **`Enter`**（或按 **`Space` / `G0`** 放卡），状态变为 **`TAG:ON`** -> **`FOUND`**，屏幕底部 `R:1` 读取计数加一，游戏内立刻掉出道具/弹出 Amiibo 识别界面！
-   - 测试无限刷卡：按 **`R`**（或开启 **`U` `AUTO-RND`**），Switch 会将该次识别为同角色新卡片并再次发奖。
+   - 验证换卡时保持 `AUTO-RND` 关闭，选另一份原始文件后再读卡。游戏对同一张卡的每日限制仍适用。

@@ -35,10 +35,13 @@ struct NfcStats {
     uint32_t poll_count{0};
     uint32_t read_count{0};
     uint32_t write_count{0};
+    uint32_t completed_reads{0};
     McuPowerState power_state{McuPowerState::Suspended};
     NfcState nfc_state{NfcState::None};
     bool tag_present{false};
     bool write_dirty{false};
+    bool read_in_progress{false};
+    bool rotation_pending{false};
 };
 
 /**

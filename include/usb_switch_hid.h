@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include "amiibo_tag.h"
 #include "switch_protocol.h"
 
 namespace amiibo {
+
+using UsbImportReport = std::array<uint8_t, 64>;
 
 /**
  * @brief Manages the custom TinyUSB Switch Pro HID driver (supporting 362-byte
@@ -26,6 +29,12 @@ public:
     void loadAndArmTag(const AmiiboTag& tag, bool present);
     void setTagPresent(bool present);
 
+#ifdef AMIIBO_SWITCH2
+    void setAutoTagRotation(bool enabled);
+    bool replaceTagWhenIdle(const AmiiboTag& expected, const AmiiboTag& replacement,
+                            bool present, uint32_t completed_reads, bool require_pending);
+#endif
+
     /// Randomize the active tag's 7-byte UID in RAM using hardware RNG.
     void randomizeActiveUid();
 
@@ -36,6 +45,10 @@ public:
     ProtocolSnapshot snapshot() const;
 
     bool isMounted() const;
+
+    bool setImportEnabled(bool enabled);
+    bool takeImportReport(UsbImportReport& report);
+    void replyToImportReport(const UsbImportReport& report);
 
 private:
     SwitchUsbTransport() = default;
