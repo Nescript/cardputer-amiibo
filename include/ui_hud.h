@@ -22,9 +22,14 @@ struct UiState {
     bool imu_rstick{false};
     bool rf_available{false};
     bool rf_enabled{false};
+    bool rf_pt_ok{false};
     NfcRfState rf_state{NfcRfState::Unavailable};
+    uint8_t rf_last_cmd{0};
     uint32_t rf_scans{0};
     uint32_t rf_writes{0};
+    uint32_t rf_fields{0};
+    uint32_t rf_selected{0};
+    uint32_t rf_rx_frames{0};
     int32_t battery_pct{100};
     uint32_t free_heap{0};
     uint8_t active_uid[kUidSize]{};

@@ -95,14 +95,18 @@ const char* nfcStateLabel(NfcState st, uint16_t& color) {
     }
 }
 
-const char* rfBadgeLabel(NfcRfState st, bool enabled, uint16_t& color, bool& filled) {
-    if (!enabled) {
+const char* rfBadgeLabel(const UiState& ui, uint16_t& color, bool& filled) {
+    if (!ui.rf_enabled) {
         color = kColBorder;
         filled = false;
         return "RF:--";
     }
     filled = true;
-    switch (st) {
+    if (ui.rf_state >= NfcRfState::Off && !ui.rf_pt_ok) {
+        color = kColRed;
+        return "RF:ERR";
+    }
+    switch (ui.rf_state) {
     case NfcRfState::Active:
         color = kColGreen;
         return "RF:ACT";
@@ -121,15 +125,23 @@ const char* rfBadgeLabel(NfcRfState st, bool enabled, uint16_t& color, bool& fil
     }
 }
 
-const char* rfBottomLabel(NfcRfState st, bool enabled, uint16_t& color, bool& filled) {
-    if (!enabled) {
+const char* rfBottomLabel(const UiState& ui, char* buf, size_t buf_sz, uint16_t& color,
+                          bool& filled) {
+    if (!ui.rf_enabled) {
         color = kColMuted;
         filled = false;
         return "RF:OFF";
     }
     filled = true;
-    switch (st) {
+    switch (ui.rf_state) {
     case NfcRfState::Off:
+        if (ui.rf_rx_frames > 0) {
+            color = kColGreen;
+            const unsigned long count = std::min<unsigned long>(
+                99UL, ui.rf_scans > 0 ? ui.rf_scans : ui.rf_rx_frames);
+            std::snprintf(buf, buf_sz, "%s:%lu", ui.rf_scans > 0 ? "OK" : "RX", count);
+            return buf;
+        }
         color = kColAccent;
         return "RF:RDY";
     case NfcRfState::Idle:
@@ -302,7 +314,7 @@ void UiHud::drawTopBar(const ProtocolSnapshot& proto, const UiState& ui) {
 
         uint16_t rf_col = kColBorder;
         bool rf_filled = false;
-        const char* rf_txt = rfBadgeLabel(ui.rf_state, ui.rf_enabled, rf_col, rf_filled);
+        const char* rf_txt = rfBadgeLabel(ui, rf_col, rf_filled);
         drawBadge(d, 51, 2, 38, 14, rf_txt, rf_col, rf_filled ? kColBg : kColMuted, rf_filled);
 
         drawBadge(d, 91, 2, 42, 14, armed ? "TAG:ON" : "TAG:--",
@@ -500,19 +512,20 @@ void UiHud::drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState
     char info[48]{};
 #ifdef AMIIBO_SWITCH2
     if (ui.rf_available) {
-        std::snprintf(info, sizeof(info), "NS2 | R:%lu RF:%lu",
-                      static_cast<unsigned long>(proto.nfc.read_count),
-                      static_cast<unsigned long>(ui.rf_scans));
+        std::snprintf(info, sizeof(info), "RF F:%lu S:%lu R:%lu",
+                      static_cast<unsigned long>(ui.rf_fields),
+                      static_cast<unsigned long>(ui.rf_selected),
+                      static_cast<unsigned long>(ui.rf_rx_frames));
     } else {
         std::snprintf(info, sizeof(info), "NS2 PAD | NFC:%s R:%lu", nfc_s,
                       static_cast<unsigned long>(proto.nfc.read_count));
     }
 #else
     if (ui.rf_available) {
-        std::snprintf(info, sizeof(info), "PRO | R:%lu RF:%lu W:%lu",
-                      static_cast<unsigned long>(proto.nfc.read_count),
-                      static_cast<unsigned long>(ui.rf_scans),
-                      static_cast<unsigned long>(proto.nfc.write_count + ui.rf_writes));
+        std::snprintf(info, sizeof(info), "RF F:%lu S:%lu R:%lu",
+                      static_cast<unsigned long>(ui.rf_fields),
+                      static_cast<unsigned long>(ui.rf_selected),
+                      static_cast<unsigned long>(ui.rf_rx_frames));
     } else {
         std::snprintf(info, sizeof(info), "PRO PAD | NFC:%s R:%lu W:%lu", nfc_s,
                       static_cast<unsigned long>(proto.nfc.read_count),
@@ -621,8 +634,9 @@ void UiHud::drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browse
     uint16_t nfc_col = kColMuted;
     const char* nfc_s = nfcStateLabel(proto.nfc.nfc_state, nfc_col);
     bool nfc_active = (proto.nfc.nfc_state != NfcState::None);
+    char rf_bot_buf[12]{};
     if (!nfc_active && ui.rf_available) {
-        nfc_s = rfBottomLabel(ui.rf_state, ui.rf_enabled, nfc_col, nfc_active);
+        nfc_s = rfBottomLabel(ui, rf_bot_buf, sizeof(rf_bot_buf), nfc_col, nfc_active);
     }
     drawBadge(d, 194, 121, 42, 12, nfc_s, nfc_col, nfc_active ? kColBg : kColMuted, nfc_active);
 }

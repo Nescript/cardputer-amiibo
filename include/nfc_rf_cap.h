@@ -21,12 +21,16 @@ struct NfcRfSnapshot {
     bool available{false};
     bool enabled{false};
     bool armed{false};
+    bool pt_mem_ok{false};
     NfcRfState state{NfcRfState::Unavailable};
     uint8_t ic_rev{0};
+    uint8_t last_cmd{0};
     uint32_t read_ops{0};
     uint32_t write_ops{0};
     uint32_t completed_scans{0};
     uint32_t rf_fields{0};
+    uint32_t selected_count{0};
+    uint32_t rx_frames{0};
 };
 
 /**
@@ -73,6 +77,7 @@ private:
     size_t fifoCount();
     void readFifo(uint8_t* out, size_t len);
     void writePtMemoryA(const uint8_t pt[15]);
+    bool readPtMemoryA(uint8_t out[15]);
     uint32_t readIrqs();
     uint32_t getIrqs(uint32_t mask);
     void enableIrqs(uint32_t bits);
@@ -80,6 +85,7 @@ private:
     void maskAllIrqs();
 
     // Chip init & passive-target state transitions (caller must hold ScopedHspiLock)
+    bool enableOscLocked();
     bool initChipLocked();
     bool startEmulationLocked();
     void disableChipLocked();
@@ -104,11 +110,14 @@ private:
     uint32_t pending_irq_{0};
     uint32_t last_rf_activity_ms_{0};
     uint32_t rf_fields_{0};
+    uint32_t selected_count_{0};
+    uint32_t rx_frames_{0};
 
     int8_t bitrate_{-1};
     bool available_{false};
     bool enabled_{false};
     bool armed_{false};
+    bool pt_mem_ok_{false};
     bool desired_enabled_{false};
     bool desired_armed_{false};
     bool pending_config_dirty_{false};
@@ -116,6 +125,7 @@ private:
     bool wakeup_{false};
     bool data_flag_{false};
     uint8_t ic_rev_{0};
+    uint8_t last_cmd_{0};
     NfcRfState state_{NfcRfState::Unavailable};
     volatile bool irq_fired_{false};
 };

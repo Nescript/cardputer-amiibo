@@ -21,6 +21,7 @@ constexpr uint8_t kSpiOpRead = 0x40;
 constexpr uint8_t kSpiOpFifoLoad = 0x80;
 constexpr uint8_t kSpiOpFifoRead = 0x9F;
 constexpr uint8_t kSpiOpPtMemA = 0xA0;
+constexpr uint8_t kSpiOpPtMemRead = 0xBF;
 constexpr uint8_t kSpiPrefixSpaceB = 0xFB;
 constexpr uint8_t kSpiPrefixTest = 0xFC;
 
@@ -55,7 +56,9 @@ constexpr uint8_t kRegAuxDisplay = 0x31;
 constexpr uint8_t kRegIcId = 0x3F;
 
 // Space B registers
+constexpr uint8_t kRegBEmdSup = 0x05;
 constexpr uint8_t kRegBAuxMod = 0x28;
+constexpr uint8_t kRegBResAm = 0x2A;
 constexpr uint8_t kRegBOvershoot1 = 0x30;
 constexpr uint8_t kRegBOvershoot2 = 0x31;
 constexpr uint8_t kRegBUndershoot1 = 0x32;
@@ -277,6 +280,21 @@ void NfcRfCap::writePtMemoryA(const uint8_t pt[15]) {
     spi.endTransaction();
 }
 
+bool NfcRfCap::readPtMemoryA(uint8_t out[15]) {
+    if (!(readReg(kRegOpCtrl) & kOpCtrlEn)) {
+        return false;
+    }
+    auto& spi = SharedHspi::instance().spi();
+    spi.beginTransaction(nfcSpiSettings());
+    digitalWrite(kNfcCsPin, LOW);
+    spi.transfer(kSpiOpPtMemRead);
+    (void)spi.transfer(0x00);  // Leading dummy byte before PT memory contents
+    spi.transferBytes(nullptr, out, 15);
+    digitalWrite(kNfcCsPin, HIGH);
+    spi.endTransaction();
+    return true;
+}
+
 uint32_t NfcRfCap::readIrqs() {
     // CRITICAL ST25R3916 order: reading REG_IRQ_MAIN (0x1A) clears REG_IRQ_ERR (0x1C),
     // so always read 0x1C first, then 0x1A..0x1B, then 0x1D.
@@ -323,6 +341,22 @@ void NfcRfCap::maskAllIrqs() {
     writeRegs(kRegIrqMaskBase, kAllMasked, sizeof(kAllMasked));
 }
 
+bool NfcRfCap::enableOscLocked() {
+    if ((readReg(kRegOpCtrl) & kOpCtrlEn) &&
+        (readReg(kRegAuxDisplay) & kAuxDisplayOscOk)) {
+        return true;
+    }
+    setBits(kRegOpCtrl, kOpCtrlEn);
+    const uint32_t start_us = micros();
+    while (static_cast<uint32_t>(micros() - start_us) < 50000U) {
+        if (readReg(kRegAuxDisplay) & kAuxDisplayOscOk) {
+            return true;
+        }
+        delayMicroseconds(100);
+    }
+    return (readReg(kRegAuxDisplay) & kAuxDisplayOscOk) != 0;
+}
+
 bool NfcRfCap::initChipLocked() {
     command(kCmdStop);
     clearBits(kRegOpCtrl, kOpCtrlTxEn | kOpCtrlRxEn);
@@ -334,12 +368,20 @@ bool NfcRfCap::initChipLocked() {
 
     // Disable MCU_CLK output; configure SPI 3.3V operation + MISO pull-downs + drive level
     writeReg(kRegIoConf1, 0x07);
-    writeReg(kRegIoConf2, 0xBC);
+    writeReg(kRegIoConf2, 0x9C);
 
     writeReg(kRegTxDriver, 0xD0);
+    writeSpaceB(kRegBResAm, 0x80);
+    setBits(kRegIoConf2, 0x20);  // aat_en
+    writeSpaceB(kRegBResAm, 0x00);
+
     writeReg(kRegEfdAct, 0x13);
     writeReg(kRegEfdDeact, 0x02);
+    changeBits(kRegPtDef, 0x50, 0xF0);
     writeReg(kRegPtMod, 0x5F);
+    writeSpaceB(kRegBEmdSup, 0x40);
+    writeReg(kRegAntTune1, 0x82);
+    writeReg(kRegAntTune2, 0x82);
 
     setBits(kRegOpCtrl, kOpCtrlEfdAuto);
     command(kCmdClearFifo);
@@ -348,17 +390,7 @@ bool NfcRfCap::initChipLocked() {
     (void)readIrqs();
     pending_irq_ = 0;
 
-    setBits(kRegOpCtrl, kOpCtrlEn);
-    const uint32_t start = millis();
-    bool osc_ok = false;
-    while ((millis() - start) < 50) {
-        if (readReg(kRegAuxDisplay) & kAuxDisplayOscOk) {
-            osc_ok = true;
-            break;
-        }
-        delay(1);
-    }
-    if (!osc_ok) {
+    if (!enableOscLocked()) {
         return false;
     }
 
@@ -368,14 +400,20 @@ bool NfcRfCap::initChipLocked() {
 }
 
 bool NfcRfCap::startEmulationLocked() {
+    // PT memory is only writable in Ready mode (OP_CTRL.en == 1).
+    if (!enableOscLocked()) {
+        pt_mem_ok_ = false;
+        return false;
+    }
+
     command(kCmdStop);
-    clearBits(kRegOpCtrl, kOpCtrlTxEn);
+    clearBits(kRegOpCtrl, kOpCtrlTxEn | kOpCtrlWu);
 
     writeReg(kRegMode, 0xC8);       // Target, NFC-A, bit-rate detection
     writeReg(kRegPtDef, 0x5C);      // fdel=5, auto-response for 106k NFC-A only
     writeReg(kRegIrqMaskBase + 3, 0x02);  // Mask I_wu_ax initially
     writeReg(kRegTimerEmv, 0x08);   // MRT step = 512/fc
-    writeReg(kRegMrt, 3);           // ~113 us mask receive timer
+    writeReg(kRegMrt, 4);           // Valid minimum MRT (4 * 512/fc ~= 151 us)
 
     clearBits(kRegIso14443A, kIsoNoTxPar | kIsoNoRxPar | kIsoNfcF0);
     changeBits(kRegAux, 0x10, 0x30);  // 7-byte UID
@@ -388,6 +426,14 @@ bool NfcRfCap::startEmulationLocked() {
     pt[13] = 0x00;  // SAK L2 (NTAG215)
     pt[14] = 0x00;
     writePtMemoryA(pt);
+
+    uint8_t verify[15]{};
+    bool verified = readPtMemoryA(verify) && std::memcmp(pt, verify, sizeof(pt)) == 0;
+    if (!verified) {
+        writePtMemoryA(pt);
+        verified = readPtMemoryA(verify) && std::memcmp(pt, verify, sizeof(pt)) == 0;
+    }
+    pt_mem_ok_ = verified;
 
     changeBits(kRegPtDef, kPtDefAcAp2p | kPtDef212424,
                kPtDefAcAp2p | kPtDef212424 | kPtDef106AcA);
@@ -415,6 +461,7 @@ void NfcRfCap::disableChipLocked() {
     pending_irq_ = 0;
     wakeup_ = false;
     data_flag_ = false;
+    pt_mem_ok_ = false;
     bitrate_ = -1;
     state_ = NfcRfState::Disabled;
 }
@@ -427,7 +474,7 @@ bool NfcRfCap::gotoOffLocked() {
     wakeup_ = false;
 
     command(kCmdStop);
-    setBits(kRegOpCtrl, kOpCtrlRxEn);
+    setBits(kRegOpCtrl, kOpCtrlEn | kOpCtrlRxEn);
     clearBits(kRegPtDef, kPtDef106AcA);  // Enable automatic anticollision response
     command(kCmdGotoSense);
     clearBits(kRegIso14443A, kIsoNfcF0);
@@ -443,7 +490,8 @@ bool NfcRfCap::gotoOffLocked() {
     if (readReg(kRegAuxDisplay) & kAuxDisplayEfdO) {
         return gotoIdleLocked();
     }
-    clearBits(kRegOpCtrl, kOpCtrlTxEn | kOpCtrlRxEn | kOpCtrlEn);
+    // Keep OP_CTRL.en set while armed for fast RF field wakeup.
+    clearBits(kRegOpCtrl, kOpCtrlTxEn | kOpCtrlRxEn);
     return false;
 }
 
@@ -454,21 +502,10 @@ bool NfcRfCap::gotoIdleLocked() {
     ++rf_fields_;
     last_rf_activity_ms_ = millis();
 
-    if (!(readReg(kRegOpCtrl) & kOpCtrlEn)) {
-        setBits(kRegOpCtrl, kOpCtrlEn | kOpCtrlRxEn);
-        if (!(readReg(kRegAuxDisplay) & kAuxDisplayOscOk)) {
-            const uint32_t start = millis();
-            bool ok = false;
-            while ((millis() - start) < 100) {
-                if (getIrqs(kIrqOsc)) {
-                    ok = true;
-                    break;
-                }
-                delay(1);
-            }
-            if (!ok) {
-                return gotoOffLocked();
-            }
+    setBits(kRegOpCtrl, kOpCtrlEn | kOpCtrlRxEn);
+    if (!(readReg(kRegAuxDisplay) & kAuxDisplayOscOk)) {
+        if (!enableOscLocked()) {
+            return gotoOffLocked();
         }
     } else {
         (void)getIrqs(kIrqOsc);
@@ -501,6 +538,7 @@ bool NfcRfCap::gotoReadyLocked() {
 bool NfcRfCap::gotoActiveLocked() {
     state_ = NfcRfState::Active;
     data_flag_ = false;
+    ++selected_count_;
     setBits(kRegPtDef, kPtDef106AcA);  // Host now answers frames
     (void)getIrqs(kIrqPar | kIrqCrc | kIrqErr2 | kIrqErr1);
     enableIrqs(kIrqRxe);
@@ -596,9 +634,10 @@ bool NfcRfCap::stepStateMachineLocked() {
             data_flag_ = true;
             return false;
         }
-        if ((got & kIrqRxePta) && bitrate_ == 0) {
+        if (got & kIrqRxePta) {
             const uint8_t pta = readReg(kRegPtDisplay);
             if ((pta & 0x0FU) > kPtaStateIdle) {
+                bitrate_ = 0;
                 return gotoReadyLocked();
             }
         }
@@ -641,6 +680,8 @@ bool NfcRfCap::stepStateMachineLocked() {
 
             data_flag_ = true;
             const size_t payload_len = n - 2;  // Strip CRC_A left in FIFO
+            ++rx_frames_;
+            last_cmd_ = rx_buf_[0];
             const RfReply reply = emu_.handleFrame(rx_buf_, payload_len, tx_buf_, sizeof(tx_buf_));
             if (reply.length > 0 || reply.is_short_ack) {
                 transmitReplyLocked(reply);
@@ -677,9 +718,10 @@ bool NfcRfCap::stepStateMachineLocked() {
             command(kCmdUnmaskRx);
             return false;
         }
-        if ((got & kIrqRxePta) && bitrate_ == 0) {
+        if (got & kIrqRxePta) {
             const uint8_t pta = readReg(kRegPtDisplay);
             if ((pta & 0x0FU) > kPtaStateHalt) {
+                bitrate_ = 0;
                 wakeup_ = true;
                 return gotoReadyLocked();
             }
@@ -806,8 +848,12 @@ NfcRfSnapshot NfcRfCap::snapshot() const {
     xSemaphoreTake(static_cast<SemaphoreHandle_t>(mutex_), portMAX_DELAY);
     snap.enabled = enabled_;
     snap.armed = armed_;
+    snap.pt_mem_ok = pt_mem_ok_;
     snap.state = state_;
+    snap.last_cmd = last_cmd_;
     snap.rf_fields = rf_fields_;
+    snap.selected_count = selected_count_;
+    snap.rx_frames = rx_frames_;
     const Ntag215EmuStats st = emu_.stats();
     snap.read_ops = st.read_ops;
     snap.write_ops = st.write_ops;
