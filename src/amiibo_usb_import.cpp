@@ -24,6 +24,7 @@ constexpr uint8_t kOpCommit = 3;
 constexpr uint8_t kOpBeginKeys = 4;
 constexpr char kKeyNamespace[] = "amiibo-repeat";
 constexpr char kKeyEntry[] = "retail-keys";
+constexpr const char* kSdKeyPaths[] = {"/key_retail.bin", "/amiibo/key_retail.bin"};
 
 enum class ImportStatus : uint8_t {
     Ok = 0,
@@ -36,16 +37,12 @@ enum class ImportStatus : uint8_t {
     KeyStorage = 8,
 };
 
-ImportStatus commitSigningKeys(const uint8_t* data) {
-    AmiiboUidSigner validator;
-    if (!validator.loadKeys(data, AmiiboUidSigner::kKeySize)) {
-        return ImportStatus::InvalidKeys;
-    }
-    validator.clear();
+bool readFileExactly(const char* path, uint8_t* output, size_t expected_size);
 
+bool persistKeysToNvs(const uint8_t* data) {
     Preferences storage;
     if (!storage.begin(kKeyNamespace, false)) {
-        return ImportStatus::KeyStorage;
+        return false;
     }
     std::array<uint8_t, AmiiboUidSigner::kKeySize> persisted{};
     const bool already_stored = storage.getBytesLength(kKeyEntry) == persisted.size() &&
@@ -56,7 +53,40 @@ ImportStatus commitSigningKeys(const uint8_t* data) {
          storage.getBytes(kKeyEntry, persisted.data(), persisted.size()) == persisted.size() &&
          std::memcmp(persisted.data(), data, persisted.size()) == 0);
     mbedtls_platform_zeroize(persisted.data(), persisted.size());
-    return stored ? ImportStatus::Ok : ImportStatus::KeyStorage;
+    return stored;
+}
+
+bool persistKeysToSd(const uint8_t* data) {
+    if (SD.cardType() == CARD_NONE) {
+        return false;
+    }
+    std::array<uint8_t, AmiiboUidSigner::kKeySize> existing{};
+    const bool already_same = readFileExactly(kSdKeyPaths[0], existing.data(), existing.size()) &&
+        std::memcmp(existing.data(), data, existing.size()) == 0;
+    mbedtls_platform_zeroize(existing.data(), existing.size());
+    if (already_same) {
+        return true;
+    }
+    File file = SD.open(kSdKeyPaths[0], FILE_WRITE);
+    if (!file) {
+        return false;
+    }
+    const size_t written = file.write(data, AmiiboUidSigner::kKeySize);
+    file.flush();
+    file.close();
+    return written == AmiiboUidSigner::kKeySize;
+}
+
+ImportStatus commitSigningKeys(const uint8_t* data, bool sd_mounted) {
+    AmiiboUidSigner validator;
+    if (!validator.loadKeys(data, AmiiboUidSigner::kKeySize)) {
+        return ImportStatus::InvalidKeys;
+    }
+    validator.clear();
+
+    const bool nvs_ok = persistKeysToNvs(data);
+    const bool sd_ok = sd_mounted && persistKeysToSd(data);
+    return (nvs_ok || sd_ok) ? ImportStatus::Ok : ImportStatus::KeyStorage;
 }
 
 bool isBinExtension(const uint8_t* path, size_t length) {
@@ -297,14 +327,27 @@ void AmiiboUsbImport::reset() {
 
 bool AmiiboUsbImport::loadSigningKeys(AmiiboUidSigner& signer) {
     signer.clear();
-    Preferences storage;
-    if (!storage.begin(kKeyNamespace, true) ||
-        storage.getBytesLength(kKeyEntry) != AmiiboUidSigner::kKeySize) {
-        return false;
-    }
     std::array<uint8_t, AmiiboUidSigner::kKeySize> data{};
-    const bool loaded = storage.getBytes(kKeyEntry, data.data(), data.size()) == data.size() &&
-                        signer.loadKeys(data.data(), data.size());
+    bool loaded = false;
+
+    Preferences storage;
+    if (storage.begin(kKeyNamespace, true) &&
+        storage.getBytesLength(kKeyEntry) == data.size() &&
+        storage.getBytes(kKeyEntry, data.data(), data.size()) == data.size()) {
+        loaded = signer.loadKeys(data.data(), data.size());
+    }
+
+    if (!loaded && SD.cardType() != CARD_NONE) {
+        for (const char* path : kSdKeyPaths) {
+            if (readFileExactly(path, data.data(), data.size()) &&
+                signer.loadKeys(data.data(), data.size())) {
+                persistKeysToNvs(data.data());
+                loaded = true;
+                break;
+            }
+        }
+    }
+
     mbedtls_platform_zeroize(data.data(), data.size());
     return loaded;
 }
@@ -391,7 +434,7 @@ void AmiiboUsbImport::handle(const uint8_t request[kPacketSize],
     if (operation == kOpCommit && payload_length == 0 && received_ == transfer_size) {
         const ImportStatus status = transfer_ == Transfer::Tag
             ? commitTag(relative_path_.data(), data_.data(), reply)
-            : commitSigningKeys(data_.data());
+            : commitSigningKeys(data_.data(), sd_mounted);
         setStatus(reply, status);
         reset();
         return;

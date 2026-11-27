@@ -17,6 +17,8 @@ struct UiState {
     bool auto_rand_uid{false};
     bool uid_randomized{false};
     bool usb_import{false};
+    bool imu_available{false};
+    bool imu_rstick{false};
     int32_t battery_pct{100};
     uint32_t free_heap{0};
     uint8_t active_uid[kUidSize]{};
@@ -39,7 +41,8 @@ public:
 private:
     void drawTopBar(const ProtocolSnapshot& proto, const UiState& ui);
     void drawBrowserPane(const SdBrowser& browser, const ProtocolSnapshot& proto);
-    void drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState& pad);
+    void drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState& pad,
+                         const UiState& ui);
     void drawUsbImportPane(const SdBrowser& browser);
     void drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browser, const UiState& ui);
 

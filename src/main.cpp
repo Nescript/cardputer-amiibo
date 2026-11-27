@@ -1,6 +1,7 @@
 #include <M5Cardputer.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 
 #include "amiibo_tag.h"
@@ -32,6 +33,15 @@ uint8_t g_last_stage = 0xFF;
 uint8_t g_last_nfc_state = 0xFF;
 uint8_t g_last_player_leds = 0xFF;
 uint32_t g_last_status_poll_ms = 0;
+
+float g_imu_zero_ay = 0.0f;
+float g_imu_zero_yaw = 0.0f;
+float g_imu_filt_dy = 0.0f;
+float g_imu_filt_yaw = 0.0f;
+uint16_t g_imu_rx = 2048;
+uint16_t g_imu_ry = 2048;
+uint32_t g_last_imu_poll_ms = 0;
+amiibo::ControllerState g_last_hud_pad{};
 
 void syncTagToTransport(bool armed) {
     g_tag_armed = armed && g_active_tag.isValid();
@@ -182,12 +192,58 @@ void handleBrowserKeys(const Keyboard_Class::KeysState& ks) {
     }
 }
 
+uint16_t mapAxisDelta(float value, float deadzone, float full_scale) {
+    constexpr float kMaxStickDelta = 1600.0f;
+    const float mag = std::fabs(value);
+    if (mag <= deadzone) {
+        return 2048;
+    }
+    const float norm = std::min(1.0f, (mag - deadzone) / (full_scale - deadzone));
+    const float signed_delta = (value > 0.0f ? norm : -norm) * kMaxStickDelta;
+    return static_cast<uint16_t>(std::clamp(static_cast<int>(2048.0f + signed_delta), 0, 4095));
+}
+
+float computeGravityYawDps(float ax, float ay, float az, float gx, float gy, float gz) {
+    const float norm = std::sqrt(ax * ax + ay * ay + az * az);
+    if (norm < 0.2f) {
+        return gz;
+    }
+    return (gx * ax + gy * ay + gz * az) / norm;
+}
+
+void toggleImuRightStick() {
+    if (!g_ui.imu_available) {
+        return;
+    }
+    g_ui.imu_rstick = !g_ui.imu_rstick;
+    g_imu_filt_dy = 0.0f;
+    g_imu_filt_yaw = 0.0f;
+    g_imu_rx = 2048;
+    g_imu_ry = 2048;
+    if (g_ui.imu_rstick) {
+        float ax = 0.0f, ay = 0.0f, az = 1.0f;
+        float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+        if (M5.Imu.getAccel(&ax, &ay, &az)) {
+            g_imu_zero_ay = ay;
+        }
+        if (M5.Imu.getGyro(&gx, &gy, &gz)) {
+            g_imu_zero_yaw = computeGravityYawDps(ax, ay, az, gx, gy, gz);
+        } else {
+            g_imu_zero_yaw = 0.0f;
+        }
+        g_last_imu_poll_ms = millis();
+    }
+    g_hud.markDirty();
+}
+
 void updateGamepadState() {
     auto& kb = M5Cardputer.Keyboard;
     amiibo::ControllerState next{};
+    bool fn_rstick_active = false;
 
 #ifdef AMIIBO_SWITCH2
     if (kb.keysState().fn) {
+        fn_rstick_active = true;
         next.rx = 2048 + 1600 * (kb.isKeyPressed('l') - kb.isKeyPressed('j'));
         next.ry = 2048 + 1600 * (kb.isKeyPressed('k') - kb.isKeyPressed('i'));
     } else
@@ -197,6 +253,28 @@ void updateGamepadState() {
         next.b = kb.isKeyPressed('k');
         next.x = kb.isKeyPressed('i');
         next.y = kb.isKeyPressed('j');
+    }
+
+    if (g_ui.imu_rstick && !fn_rstick_active) {
+        const uint32_t now = millis();
+        if ((now - g_last_imu_poll_ms) >= 15) {
+            g_last_imu_poll_ms = now;
+            float ax = 0.0f, ay = 0.0f, az = 1.0f;
+            float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+            if (M5.Imu.getAccel(&ax, &ay, &az)) {
+                const float raw_dy = ay - g_imu_zero_ay;
+                g_imu_filt_dy = 0.35f * raw_dy + 0.65f * g_imu_filt_dy;
+                g_imu_ry = mapAxisDelta(-g_imu_filt_dy, 0.07f, 0.55f);
+            }
+            if (M5.Imu.getGyro(&gx, &gy, &gz)) {
+                const float raw_yaw =
+                    computeGravityYawDps(ax, ay, az, gx, gy, gz) - g_imu_zero_yaw;
+                g_imu_filt_yaw = 0.40f * raw_yaw + 0.60f * g_imu_filt_yaw;
+                g_imu_rx = mapAxisDelta(-g_imu_filt_yaw, 8.0f, 120.0f);
+            }
+        }
+        next.rx = g_imu_rx;
+        next.ry = g_imu_ry;
     }
 
     next.l = kb.isKeyPressed('q');
@@ -226,7 +304,17 @@ void updateGamepadState() {
     if (std::memcmp(&next, &g_pad, sizeof(next)) != 0) {
         g_pad = next;
         amiibo::SwitchUsbTransport::instance().setControllerState(g_pad);
-        g_hud.markDirty();
+
+        const int drx = std::abs(static_cast<int>(g_pad.rx) - static_cast<int>(g_last_hud_pad.rx));
+        const int dry = std::abs(static_cast<int>(g_pad.ry) - static_cast<int>(g_last_hud_pad.ry));
+        amiibo::ControllerState cmp_a = g_pad;
+        amiibo::ControllerState cmp_b = g_last_hud_pad;
+        cmp_a.rx = cmp_b.rx = 2048;
+        cmp_a.ry = cmp_b.ry = 2048;
+        if (std::memcmp(&cmp_a, &cmp_b, sizeof(cmp_a)) != 0 || drx >= 48 || dry >= 48) {
+            g_last_hud_pad = g_pad;
+            g_hud.markDirty();
+        }
     }
 }
 
@@ -234,6 +322,7 @@ void clearGamepadState() {
     amiibo::ControllerState neutral{};
     if (std::memcmp(&neutral, &g_pad, sizeof(neutral)) != 0) {
         g_pad = neutral;
+        g_last_hud_pad = neutral;
         amiibo::SwitchUsbTransport::instance().setControllerState(g_pad);
     }
 }
@@ -263,6 +352,7 @@ void setup() {
 
     g_ui.free_heap = ESP.getFreeHeap();
     g_ui.battery_pct = M5Cardputer.Power.getBatteryLevel();
+    g_ui.imu_available = M5.Imu.isEnabled();
     g_hud.markDirty();
 }
 
@@ -328,6 +418,8 @@ void loop() {
             requestFreshUid(true);
         } else if (g_ui.mode == amiibo::UiMode::Browser) {
             handleBrowserKeys(ks);
+        } else if (containsKey(ks.word, 'm')) {
+            toggleImuRightStick();
         }
     }
 

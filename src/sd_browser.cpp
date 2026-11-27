@@ -39,7 +39,7 @@ bool endsWithIgnoreCase(const char* str, const char* suffix) {
 }
 
 bool isSupportedAmiiboFile(const char* name) {
-    if (!name || name[0] == '.') {
+    if (!name || name[0] == '.' || strcasecmp(name, "key_retail.bin") == 0) {
         return false;
     }
     return endsWithIgnoreCase(name, ".bin") || endsWithIgnoreCase(name, ".nfc");
