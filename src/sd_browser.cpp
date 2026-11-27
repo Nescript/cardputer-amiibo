@@ -1,7 +1,7 @@
 #include "sd_browser.h"
+#include "shared_hspi.h"
 
 #include <SD.h>
-#include <SPI.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -13,14 +13,7 @@ namespace amiibo {
 
 namespace {
 
-// Cardputer-Adv microSD dedicated HSPI pins (GPIO11 is TCA8418 INT - never touch!)
-constexpr int kSdSckPin = 40;
-constexpr int kSdMisoPin = 39;
-constexpr int kSdMosiPin = 14;
-constexpr int kSdCsPin = 12;
 constexpr uint32_t kSdFreqHz = 20000000;
-
-SPIClass g_sd_spi(HSPI);
 
 bool endsWithIgnoreCase(const char* str, const char* suffix) {
     const size_t slen = std::strlen(str);
@@ -53,8 +46,9 @@ const char* baseName(const char* path) {
 }  // namespace
 
 bool SdBrowser::begin() {
-    g_sd_spi.begin(kSdSckPin, kSdMisoPin, kSdMosiPin, kSdCsPin);
-    sd_mounted_ = SD.begin(kSdCsPin, g_sd_spi, kSdFreqHz);
+    SharedHspi::instance().init();
+    ScopedHspiLock lock;
+    sd_mounted_ = SD.begin(kSdCsPin, SharedHspi::instance().spi(), kSdFreqHz);
     if (!sd_mounted_) {
         entry_count_ = 0;
         selected_idx_ = 0;
@@ -92,6 +86,7 @@ bool SdBrowser::scanDirectory(const char* dir_path) {
         return false;
     }
 
+    ScopedHspiLock lock;
     File dir = SD.open(dir_path);
     if (!dir || !dir.isDirectory()) {
         if (dir) {
@@ -204,28 +199,30 @@ bool SdBrowser::activateSelected(AmiiboTag& out_tag, bool& loaded_file) {
         return scanDirectory(current_dir_);
     }
 
-    File f = SD.open(path, FILE_READ);
-    if (!f) {
-        return false;
-    }
-
-    const size_t fsize = static_cast<size_t>(f.size());
     bool ok = false;
-    bool is_bin = endsWithIgnoreCase(sel.name, ".bin");
-
-    if (is_bin && (fsize == kNtag215Size || fsize == kNtag215LongSize)) {
-        std::array<uint8_t, kNtag215LongSize> raw{};
-        const size_t n = f.read(raw.data(), fsize);
-        ok = out_tag.loadBin(raw.data(), n);
-    } else if (!is_bin && fsize > 0 && fsize <= 8192) {
-        // A fixed 8 KiB buffer would overflow the loop task stack even on directory entry.
-        std::unique_ptr<char[]> txt(new (std::nothrow) char[fsize]);
-        if (txt) {
-            const size_t n = f.read(reinterpret_cast<uint8_t*>(txt.get()), fsize);
-            ok = out_tag.loadFlipperNfcText(txt.get(), n);
+    const bool is_bin = endsWithIgnoreCase(sel.name, ".bin");
+    {
+        ScopedHspiLock lock;
+        File f = SD.open(path, FILE_READ);
+        if (!f) {
+            return false;
         }
+
+        const size_t fsize = static_cast<size_t>(f.size());
+        if (is_bin && (fsize == kNtag215Size || fsize == kNtag215LongSize)) {
+            std::array<uint8_t, kNtag215LongSize> raw{};
+            const size_t n = f.read(raw.data(), fsize);
+            ok = out_tag.loadBin(raw.data(), n);
+        } else if (!is_bin && fsize > 0 && fsize <= 8192) {
+            // A fixed 8 KiB buffer would overflow the loop task stack even on directory entry.
+            std::unique_ptr<char[]> txt(new (std::nothrow) char[fsize]);
+            if (txt) {
+                const size_t n = f.read(reinterpret_cast<uint8_t*>(txt.get()), fsize);
+                ok = out_tag.loadFlipperNfcText(txt.get(), n);
+            }
+        }
+        f.close();
     }
-    f.close();
 
     if (ok) {
         std::strncpy(active_file_path_, path, sizeof(active_file_path_) - 1);
@@ -240,6 +237,7 @@ bool SdBrowser::saveCurrentBin(const AmiiboTag& tag) {
     if (!sd_mounted_ || !active_is_bin_ || active_file_path_[0] == '\0' || !tag.isValid()) {
         return false;
     }
+    ScopedHspiLock lock;
     File f = SD.open(active_file_path_, FILE_WRITE);
     if (!f) {
         return false;

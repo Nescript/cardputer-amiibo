@@ -95,6 +95,60 @@ const char* nfcStateLabel(NfcState st, uint16_t& color) {
     }
 }
 
+const char* rfBadgeLabel(NfcRfState st, bool enabled, uint16_t& color, bool& filled) {
+    if (!enabled) {
+        color = kColBorder;
+        filled = false;
+        return "RF:--";
+    }
+    filled = true;
+    switch (st) {
+    case NfcRfState::Active:
+        color = kColGreen;
+        return "RF:ACT";
+    case NfcRfState::Idle:
+    case NfcRfState::Ready:
+    case NfcRfState::Halt:
+        color = kColAmber;
+        return "RF:FLD";
+    case NfcRfState::Off:
+        color = kColAccent;
+        return "RF:ON";
+    default:
+        color = kColBorder;
+        filled = false;
+        return "RF:..";
+    }
+}
+
+const char* rfBottomLabel(NfcRfState st, bool enabled, uint16_t& color, bool& filled) {
+    if (!enabled) {
+        color = kColMuted;
+        filled = false;
+        return "RF:OFF";
+    }
+    filled = true;
+    switch (st) {
+    case NfcRfState::Off:
+        color = kColAccent;
+        return "RF:RDY";
+    case NfcRfState::Idle:
+    case NfcRfState::Ready:
+        color = kColAmber;
+        return "FIELD";
+    case NfcRfState::Active:
+        color = kColGreen;
+        return "READ";
+    case NfcRfState::Halt:
+        color = kColGreen;
+        return "HALT";
+    default:
+        color = kColMuted;
+        filled = false;
+        return "RF:OFF";
+    }
+}
+
 void drawEllipsisText(M5GFX& gfx, const char* text, int x, int y, size_t max_chars) {
     char buf[64]{};
     const size_t len = std::strlen(text);
@@ -241,24 +295,48 @@ void UiHud::drawTopBar(const ProtocolSnapshot& proto, const UiState& ui) {
 
     uint16_t st_col = kColMuted;
     const char* st_txt = stageLabel(proto.stage, st_col);
-    drawBadge(d, 3, 2, 48, 14, st_txt, st_col, kColBg, true);
-
     const bool armed = proto.nfc.tag_present;
-    drawBadge(d, 54, 2, 46, 14, armed ? "TAG:ON" : "TAG:--", armed ? kColGreen : kColBorder,
-              armed ? kColBg : kColMuted, armed);
 
-    // 4 circular Player LEDs
-    for (int i = 0; i < 4; ++i) {
-        const bool on = (proto.player_leds & (1U << i)) != 0;
-        const int cx = 109 + i * 8;
-        if (on) {
-            d.fillCircle(cx, 9, 3, kColGreen);
-        } else {
-            d.drawCircle(cx, 9, 2, kColBorder);
+    if (ui.rf_available) {
+        drawBadge(d, 3, 2, 46, 14, st_txt, st_col, kColBg, true);
+
+        uint16_t rf_col = kColBorder;
+        bool rf_filled = false;
+        const char* rf_txt = rfBadgeLabel(ui.rf_state, ui.rf_enabled, rf_col, rf_filled);
+        drawBadge(d, 51, 2, 38, 14, rf_txt, rf_col, rf_filled ? kColBg : kColMuted, rf_filled);
+
+        drawBadge(d, 91, 2, 42, 14, armed ? "TAG:ON" : "TAG:--",
+                  armed ? kColGreen : kColBorder, armed ? kColBg : kColMuted, armed);
+
+        // 4 circular Player LEDs
+        for (int i = 0; i < 4; ++i) {
+            const bool on = (proto.player_leds & (1U << i)) != 0;
+            const int cx = 140 + i * 7;
+            if (on) {
+                d.fillCircle(cx, 9, 3, kColGreen);
+            } else {
+                d.drawCircle(cx, 9, 2, kColBorder);
+            }
+        }
+    } else {
+        drawBadge(d, 3, 2, 48, 14, st_txt, st_col, kColBg, true);
+
+        drawBadge(d, 54, 2, 46, 14, armed ? "TAG:ON" : "TAG:--",
+                  armed ? kColGreen : kColBorder, armed ? kColBg : kColMuted, armed);
+
+        // 4 circular Player LEDs
+        for (int i = 0; i < 4; ++i) {
+            const bool on = (proto.player_leds & (1U << i)) != 0;
+            const int cx = 109 + i * 8;
+            if (on) {
+                d.fillCircle(cx, 9, 3, kColGreen);
+            } else {
+                d.drawCircle(cx, 9, 2, kColBorder);
+            }
         }
     }
 
-    // Short version + Battery % + Battery icon
+    // Short version (only when RF badge isn't occupying top-bar width) + Battery % + Battery icon
     char short_ver[8]{};
     std::strncpy(short_ver, APP_VERSION, sizeof(short_ver) - 1);
     if (char* dash = std::strchr(short_ver, '-')) {
@@ -274,11 +352,13 @@ void UiHud::drawTopBar(const ProtocolSnapshot& proto, const UiState& ui) {
     d.setCursor(pct_x, 5);
     d.print(pct_buf);
 
-    const int ver_x = pct_x - static_cast<int>(std::strlen(short_ver)) * 6 - 5;
-    if (ver_x >= 140) {
-        d.setTextColor(kColMuted, kColPanel);
-        d.setCursor(ver_x, 5);
-        d.print(short_ver);
+    if (!ui.rf_available) {
+        const int ver_x = pct_x - static_cast<int>(std::strlen(short_ver)) * 6 - 5;
+        if (ver_x >= 140) {
+            d.setTextColor(kColMuted, kColPanel);
+            d.setCursor(ver_x, 5);
+            d.print(short_ver);
+        }
     }
 
     drawBatteryIcon(d, 219, 4, ui.battery_pct);
@@ -417,14 +497,27 @@ void UiHud::drawGamepadPane(const ProtocolSnapshot& proto, const ControllerState
 
     uint16_t nfc_col = kColMuted;
     const char* nfc_s = nfcStateLabel(proto.nfc.nfc_state, nfc_col);
-    char info[44]{};
+    char info[48]{};
 #ifdef AMIIBO_SWITCH2
-    std::snprintf(info, sizeof(info), "NS2 PAD | NFC:%s R:%lu", nfc_s,
-                  static_cast<unsigned long>(proto.nfc.read_count));
+    if (ui.rf_available) {
+        std::snprintf(info, sizeof(info), "NS2 | R:%lu RF:%lu",
+                      static_cast<unsigned long>(proto.nfc.read_count),
+                      static_cast<unsigned long>(ui.rf_scans));
+    } else {
+        std::snprintf(info, sizeof(info), "NS2 PAD | NFC:%s R:%lu", nfc_s,
+                      static_cast<unsigned long>(proto.nfc.read_count));
+    }
 #else
-    std::snprintf(info, sizeof(info), "PRO PAD | NFC:%s R:%lu W:%lu", nfc_s,
-                  static_cast<unsigned long>(proto.nfc.read_count),
-                  static_cast<unsigned long>(proto.nfc.write_count));
+    if (ui.rf_available) {
+        std::snprintf(info, sizeof(info), "PRO | R:%lu RF:%lu W:%lu",
+                      static_cast<unsigned long>(proto.nfc.read_count),
+                      static_cast<unsigned long>(ui.rf_scans),
+                      static_cast<unsigned long>(proto.nfc.write_count + ui.rf_writes));
+    } else {
+        std::snprintf(info, sizeof(info), "PRO PAD | NFC:%s R:%lu W:%lu", nfc_s,
+                      static_cast<unsigned long>(proto.nfc.read_count),
+                      static_cast<unsigned long>(proto.nfc.write_count));
+    }
 #endif
     d.print(info);
 
@@ -488,10 +581,12 @@ void UiHud::drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browse
     const bool writing = (proto.nfc.nfc_state == NfcState::Writing ||
                           proto.nfc.nfc_state == NfcState::AwaitingWrite ||
                           proto.nfc.nfc_state == NfcState::ProcessingWrite);
+    const bool rf_armed =
+        ui.rf_available && ui.rf_enabled && ui.rf_state >= NfcRfState::Off;
     const uint16_t border_col =
-        writing ? kColAmber : (proto.nfc.tag_present ? kColGreen : kColBorder);
+        writing ? kColAmber : ((proto.nfc.tag_present || rf_armed) ? kColGreen : kColBorder);
     d.drawFastHLine(0, 104, 240, border_col);
-    if (proto.nfc.tag_present) {
+    if (proto.nfc.tag_present || rf_armed) {
         d.drawRect(0, 104, 240, 31, border_col);
     }
 
@@ -525,7 +620,10 @@ void UiHud::drawBottomBar(const ProtocolSnapshot& proto, const SdBrowser& browse
 
     uint16_t nfc_col = kColMuted;
     const char* nfc_s = nfcStateLabel(proto.nfc.nfc_state, nfc_col);
-    const bool nfc_active = (proto.nfc.nfc_state != NfcState::None);
+    bool nfc_active = (proto.nfc.nfc_state != NfcState::None);
+    if (!nfc_active && ui.rf_available) {
+        nfc_s = rfBottomLabel(ui.rf_state, ui.rf_enabled, nfc_col, nfc_active);
+    }
     drawBadge(d, 194, 121, 42, 12, nfc_s, nfc_col, nfc_active ? kColBg : kColMuted, nfc_active);
 }
 

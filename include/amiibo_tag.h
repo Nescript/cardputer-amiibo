@@ -16,6 +16,8 @@ constexpr size_t kUidSize = 7;
  */
 class AmiiboTag {
 public:
+    static constexpr size_t kSignatureSize = 32;
+
     AmiiboTag() { reset(); }
 
     void reset();
@@ -32,6 +34,8 @@ public:
     bool isValid() const { return valid_; }
     const uint8_t* data() const { return data_.data(); }
     uint8_t* mutableData() { return data_.data(); }
+    const uint8_t* signature() const { return signature_.data(); }
+    bool hasSignature() const { return has_signature_; }
     static constexpr size_t size() { return kNtag215Size; }
 
     /// Extract 7-byte NTAG215 UID: bytes [0,1,2,4,5,6,7].
@@ -52,6 +56,8 @@ public:
 
 private:
     std::array<uint8_t, kNtag215Size> data_{};
+    std::array<uint8_t, kSignatureSize> signature_{};
+    bool has_signature_{false};
     bool valid_{false};
 };
 

@@ -1,5 +1,6 @@
 #include "amiibo_usb_import.h"
 #include "amiibo_uid_signer.h"
+#include "shared_hspi.h"
 
 #include <Preferences.h>
 #include <SD.h>
@@ -57,6 +58,7 @@ bool persistKeysToNvs(const uint8_t* data) {
 }
 
 bool persistKeysToSd(const uint8_t* data) {
+    ScopedHspiLock lock;
     if (SD.cardType() == CARD_NONE) {
         return false;
     }
@@ -133,6 +135,7 @@ void buildTargetPath(const char* relative_path, char* target, size_t target_size
 }
 
 bool readFileExactly(const char* path, uint8_t* output, size_t expected_size) {
+    ScopedHspiLock lock;
     File file = SD.open(path, FILE_READ);
     if (!file || file.isDirectory() || file.size() != expected_size) {
         if (file) {
@@ -155,6 +158,7 @@ bool readFileExactly(const char* path, uint8_t* output, size_t expected_size) {
 }
 
 bool ensureParentDirectories(const char* target_path) {
+    ScopedHspiLock lock;
     char parent[64]{};
     const size_t target_length = std::strlen(target_path);
     if (target_length >= sizeof(parent)) {
@@ -240,6 +244,8 @@ ImportStatus commitTag(const char* relative_path, const uint8_t* data,
         data[3] != tag.data()[3] || data[8] != tag.data()[8] || !tag.verifyBcc()) {
         return ImportStatus::InvalidBin;
     }
+
+    ScopedHspiLock lock;
 
     char target_path[64]{};
     char part_path[96]{};
@@ -337,13 +343,16 @@ bool AmiiboUsbImport::loadSigningKeys(AmiiboUidSigner& signer) {
         loaded = signer.loadKeys(data.data(), data.size());
     }
 
-    if (!loaded && SD.cardType() != CARD_NONE) {
-        for (const char* path : kSdKeyPaths) {
-            if (readFileExactly(path, data.data(), data.size()) &&
-                signer.loadKeys(data.data(), data.size())) {
-                persistKeysToNvs(data.data());
-                loaded = true;
-                break;
+    if (!loaded) {
+        ScopedHspiLock lock;
+        if (SD.cardType() != CARD_NONE) {
+            for (const char* path : kSdKeyPaths) {
+                if (readFileExactly(path, data.data(), data.size()) &&
+                    signer.loadKeys(data.data(), data.size())) {
+                    persistKeysToNvs(data.data());
+                    loaded = true;
+                    break;
+                }
             }
         }
     }

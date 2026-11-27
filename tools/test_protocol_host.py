@@ -14,6 +14,7 @@ def main() -> int:
         ROOT / "tools" / "test_protocol_host.cpp",
         ROOT / "src" / "amiibo_tag.cpp",
         ROOT / "src" / "nfc_mcu.cpp",
+        ROOT / "src" / "ntag215_emu.cpp",
         ROOT / "src" / "switch_protocol.cpp",
     ]
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -8,6 +8,8 @@ namespace amiibo {
 
 void AmiiboTag::reset() {
     data_.fill(0);
+    signature_.fill(0);
+    has_signature_ = false;
     valid_ = false;
 }
 
@@ -16,6 +18,13 @@ bool AmiiboTag::loadBin(const uint8_t* data, size_t len) {
         return false;
     }
     std::memcpy(data_.data(), data, kNtag215Size);
+    if (len == kNtag215LongSize) {
+        std::memcpy(signature_.data(), data + kNtag215Size, kSignatureSize);
+        has_signature_ = true;
+    } else {
+        signature_.fill(0);
+        has_signature_ = false;
+    }
     valid_ = true;
     recomputeBcc();
     return true;
@@ -93,6 +102,8 @@ bool AmiiboTag::loadFlipperNfcText(const char* text, size_t len) {
         return false;
     }
     data_ = tmp;
+    signature_.fill(0);
+    has_signature_ = false;
     valid_ = true;
     recomputeBcc();
     return true;
@@ -100,6 +111,8 @@ bool AmiiboTag::loadFlipperNfcText(const char* text, size_t len) {
 
 void AmiiboTag::loadDemoBlankTag() {
     data_.fill(0);
+    signature_.fill(0);
+    has_signature_ = false;
     // Standard NXP NTAG215 demo UID: 04 11 22 33 44 55 66
     data_[0] = 0x04;
     data_[1] = 0x11;

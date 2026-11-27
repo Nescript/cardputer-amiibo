@@ -6,6 +6,7 @@
 
 #include "amiibo_tag.h"
 #include "nfc_mcu.h"
+#include "ntag215_emu.h"
 #include "switch_protocol.h"
 
 using namespace amiibo;
@@ -325,6 +326,133 @@ void testButtonAndStickPacking() {
     assert(rep.data[8] == 0x12);
 }
 
+void testNtag215RfEmulation() {
+    std::vector<uint8_t> long_bin(kNtag215LongSize, 0);
+    for (size_t i = 0; i < kNtag215Size; ++i) {
+        long_bin[i] = static_cast<uint8_t>((i * 5 + 1) & 0xFFU);
+    }
+    long_bin[0] = 0x04;
+    long_bin[1] = 0x12;
+    long_bin[2] = 0x34;
+    long_bin[4] = 0x56;
+    long_bin[5] = 0x78;
+    long_bin[6] = 0x9A;
+    long_bin[7] = 0xBC;
+    // Set non-zero PWD & PACK in pages 133..134 to verify masking on READ/FAST_READ
+    long_bin[133 * 4 + 0] = 0xDE;
+    long_bin[133 * 4 + 1] = 0xAD;
+    long_bin[133 * 4 + 2] = 0xBE;
+    long_bin[133 * 4 + 3] = 0xEF;
+    long_bin[134 * 4 + 0] = 0x80;
+    long_bin[134 * 4 + 1] = 0x80;
+    for (size_t i = 0; i < AmiiboTag::kSignatureSize; ++i) {
+        long_bin[kNtag215Size + i] = static_cast<uint8_t>(0xA0 + i);
+    }
+
+    AmiiboTag tag;
+    assert(tag.loadBin(long_bin.data(), long_bin.size()));
+    assert(tag.hasSignature());
+    assert(tag.signature()[0] == 0xA0 && tag.signature()[31] == 0xBF);
+
+    Ntag215Emulator emu;
+    emu.loadTag(tag);
+    uint8_t out[560]{};
+
+    // GET_VERSION (0x60)
+    const uint8_t get_ver[1] = {0x60};
+    RfReply r = emu.handleFrame(get_ver, sizeof(get_ver), out, sizeof(out));
+    assert(!r.is_short_ack && r.length == 8);
+    assert(out[1] == 0x04 && out[6] == 0x11 && out[7] == 0x03);
+
+    // READ (0x30) page 0 + wraparound/PWD-mask check on page 132
+    const uint8_t read_p0[2] = {0x30, 0x00};
+    r = emu.handleFrame(read_p0, sizeof(read_p0), out, sizeof(out));
+    assert(r.length == 16 && out[0] == 0x04 && out[1] == 0x12);
+
+    const uint8_t read_p132[2] = {0x30, 132};
+    r = emu.handleFrame(read_p132, sizeof(read_p132), out, sizeof(out));
+    assert(r.length == 16);
+    assert(std::memcmp(out, tag.data() + 132 * 4, 4) == 0);
+    // Pages 133 and 134 (bytes 4..11) must be masked to 0x00; byte 12..15 wraps to page 0
+    for (size_t i = 4; i < 12; ++i) {
+        assert(out[i] == 0x00);
+    }
+    assert(out[12] == 0x04 && out[13] == 0x12);
+
+    // FAST_READ (0x3A) full 0..134 (540 bytes), with pages 133..134 masked
+    const uint8_t fast_all[3] = {0x3A, 0x00, 134};
+    r = emu.handleFrame(fast_all, sizeof(fast_all), out, sizeof(out));
+    assert(r.length == 540);
+    assert(std::memcmp(out, tag.data(), 532) == 0);
+    for (size_t i = 532; i < 540; ++i) {
+        assert(out[i] == 0x00);
+    }
+
+    // Invalid FAST_READ range returns 4-bit NAK 0x00
+    const uint8_t fast_bad[3] = {0x3A, 10, 5};
+    r = emu.handleFrame(fast_bad, sizeof(fast_bad), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x00);
+
+    // PWD_AUTH (0x1B) using Amiibo UID-derived password -> returns 2-byte PACK
+    uint8_t uid[kUidSize]{};
+    tag.getUid(uid);
+    const uint8_t pwd_ok[5] = {
+        0x1B,
+        static_cast<uint8_t>(0xAAU ^ uid[1] ^ uid[3]),
+        static_cast<uint8_t>(0x55U ^ uid[2] ^ uid[4]),
+        static_cast<uint8_t>(0xAAU ^ uid[3] ^ uid[5]),
+        static_cast<uint8_t>(0x55U ^ uid[4] ^ uid[6]),
+    };
+    r = emu.handleFrame(pwd_ok, sizeof(pwd_ok), out, sizeof(out));
+    assert(!r.is_short_ack && r.length == 2 && out[0] == 0x80 && out[1] == 0x80);
+
+    const uint8_t pwd_bad[5] = {0x1B, 0x00, 0x00, 0x00, 0x00};
+    r = emu.handleFrame(pwd_bad, sizeof(pwd_bad), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x00);
+
+    // WRITE (0xA2): protected page < 3 -> NAK 0x00; user page -> ACK 0x0A + dirty flag
+    const uint8_t write_ro[6] = {0xA2, 0x01, 0x11, 0x22, 0x33, 0x44};
+    r = emu.handleFrame(write_ro, sizeof(write_ro), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x00);
+    assert(!emu.consumeWriteDirty());
+
+    const uint8_t write_user[6] = {0xA2, 20, 0xCA, 0xFE, 0xBA, 0xBE};
+    r = emu.handleFrame(write_user, sizeof(write_user), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x0A);
+    assert(emu.consumeWriteDirty());
+    assert(!emu.consumeWriteDirty());
+
+    // COMP_WRITE (0xA0) 2-step flow
+    const uint8_t comp_step1[2] = {0xA0, 21};
+    r = emu.handleFrame(comp_step1, sizeof(comp_step1), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x0A);
+    uint8_t comp_step2[16]{0x11, 0x22, 0x33, 0x44};
+    r = emu.handleFrame(comp_step2, sizeof(comp_step2), out, sizeof(out));
+    assert(r.is_short_ack && r.nibble == 0x0A);
+    assert(emu.consumeWriteDirty());
+
+    AmiiboTag exported;
+    emu.exportTag(exported);
+    assert(exported.data()[20 * 4 + 0] == 0xCA && exported.data()[20 * 4 + 3] == 0xBE);
+    assert(exported.data()[21 * 4 + 0] == 0x11 && exported.data()[21 * 4 + 3] == 0x44);
+    assert(exported.hasSignature() && exported.signature()[0] == 0xA0);
+
+    // READ_SIG (0x3C) & READ_CNT (0x39)
+    const uint8_t read_sig[2] = {0x3C, 0x00};
+    r = emu.handleFrame(read_sig, sizeof(read_sig), out, sizeof(out));
+    assert(r.length == 32 && out[0] == 0xA0 && out[31] == 0xBF);
+
+    const uint8_t read_cnt[2] = {0x39, 0x02};
+    r = emu.handleFrame(read_cnt, sizeof(read_cnt), out, sizeof(out));
+    assert(r.length == 3 && out[0] == 0 && out[1] == 0 && out[2] == 0);
+
+    // HLTA (0x50 0x00) triggers onFieldReset() -> completed_scans increments (>=4 pages read)
+    const uint8_t hlta[2] = {0x50, 0x00};
+    r = emu.handleFrame(hlta, sizeof(hlta), out, sizeof(out));
+    assert(r.halt && r.length == 0 && !r.is_short_ack);
+    assert(emu.stats().completed_scans == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -333,6 +461,7 @@ int main() {
     testWiredHandshakeAndSubcommands();
     testNfcFlowAnd362ByteTransfer();
     testButtonAndStickPacking();
+    testNtag215RfEmulation();
     std::printf("ALL HOST PROTOCOL TESTS PASSED!\n");
     return 0;
 }

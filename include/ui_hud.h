@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "nfc_rf_cap.h"
 #include "sd_browser.h"
 #include "switch_protocol.h"
 
@@ -19,6 +20,11 @@ struct UiState {
     bool usb_import{false};
     bool imu_available{false};
     bool imu_rstick{false};
+    bool rf_available{false};
+    bool rf_enabled{false};
+    NfcRfState rf_state{NfcRfState::Unavailable};
+    uint32_t rf_scans{0};
+    uint32_t rf_writes{0};
     int32_t battery_pct{100};
     uint32_t free_heap{0};
     uint8_t active_uid[kUidSize]{};
